@@ -411,12 +411,25 @@ fn migrate_runtime_assets(app_root: &PathBuf) {
         return;
     }
 
-    let mut migrated = Vec::new();
+    let mut migrated: Vec<&str> = Vec::new();
     for sub in ["models", "bin", "data"] {
         let dst = app_root.join(sub);
         if fs::read_dir(&dst).map(|mut entries| entries.next().is_some()).unwrap_or(false) {
             continue; // Destination already populated.
         }
+
+        // 1) Bundled resources shipped inside the installer, unpacked next to
+        //    the exe (self-contained installs on any machine).
+        let bundled = app_root.join("resources").join(sub);
+        if bundled.is_dir() {
+            if copy_dir_recursive(&bundled, &dst).is_ok() {
+                let _ = fs::remove_dir_all(&bundled);
+                migrated.push(sub);
+                continue;
+            }
+        }
+
+        // 2) The original build-time checkout (same-machine reinstall flow).
         let src = src_root.join(sub);
         if !src.is_dir() || src == dst {
             continue;
@@ -427,6 +440,13 @@ fn migrate_runtime_assets(app_root: &PathBuf) {
     }
     for m in &migrated {
         eprintln!("[FlowLocal] migrated '{}' into install folder", m);
+    }
+
+    // Tidy up: drop the empty resources dir left after extraction.
+    if let Ok(mut entries) = fs::read_dir(app_root.join("resources")) {
+        if entries.next().is_none() {
+            let _ = fs::remove_dir(app_root.join("resources"));
+        }
     }
 }
 

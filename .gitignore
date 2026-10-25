@@ -18,3 +18,6 @@ find_release.ps1
 
 # Private local data (dictation history, settings)
 data/
+
+# Bundled runtime assets copied into src-tauri/resources at build time
+src-tauri/resources/

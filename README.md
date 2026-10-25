@@ -218,6 +218,8 @@ python -c "import scripts.setup_whisper_engine as s; s.setup_model('base.en')"
 ```
 Or download `ggml-base.en.bin` (or other models from the `ggml-*` list) manually into `models\`.
 
+**Important**: this step is *also* what makes the installer self-contained. At build time, `scripts\prepare_bundle_resources.js` (run automatically by `npx tauri build`) copies `bin\` and `models\` into `src-tauri\resources\`, and the bundler packs them into the installer. On first launch after installation the app unpacks them next to the installed exe (`%LOCALAPPDATA%\FlowLocal\`) and works standalone. Skipping this step produces an installer without a speech engine.
+
 Verify: `bin\whisper\Release\whisper-cli.exe` and `models\ggml-tiny.en.bin` exist.
 
 ### 7.5 Build environment (PowerShell)
@@ -247,10 +249,12 @@ npx tauri build
 ```
 
 Artifacts (adjust prefix if you used a different `CARGO_TARGET_DIR`):
-- NSIS installer: `%LOCALAPPDATA%\flowlocal_target\release\bundle\nsis\FlowLocal_0.1.0_x64-setup.exe`
-- MSI installer: `%LOCALAPPDATA%\flowlocal_target\release\bundle\msi\FlowLocal_0.1.0_x64_en-US.msi`
+- NSIS installer: `%LOCALAPPDATA%\flowlocal_target\release\bundle\nsis\FlowLocal_0.1.0_x64-setup.exe` (**~194 MB** — fully self-contained: app + whisper engine + models)
+- MSI installer: `%LOCALAPPDATA%\flowlocal_target\release\bundle\msi\FlowLocal_0.1.0_x64_en-US.msi` (~207 MB)
 
-Verify: both files exist and are a few MB each.
+Verify: both files exist with sizes near the values above.
+
+**This one file is all you ever need to install FlowLocal on any Windows x64 machine.** Copy it via USB or any transfer, run it (or `... /S` for silent), and the app works — no Python, Node, Rust, or network downloads required on the target machine.
 
 ### 7.7 Install
 
@@ -258,7 +262,7 @@ Verify: both files exist and are a few MB each.
 Start-Process -Wait "$env:LOCALAPPDATA\flowlocal_target\release\bundle\nsis\FlowLocal_0.1.0_x64-setup.exe" -ArgumentList "/S"
 ```
 
-On first launch the packaged app **self-migrates**: it copies `bin\`, `models\` and `data\` from the repo folder (the path is baked in at build time and is your fresh-machine clone path) into the install folder `%LOCALAPPDATA%\FlowLocal`. Afterwards the app is fully standalone — the repo folder can be deleted.
+On first launch the packaged app unpacks the bundled whisper engine and models from its own `resources` into the install folder (`%LOCALAPPDATA%\FlowLocal`), then usually copies `data\` from the build-time checkout folder for same-machine reinstalls. Afterwards the app is fully standalone — the repo folder can be deleted.
 
 ### 7.8 Verify (do not skip)
 
@@ -279,7 +283,7 @@ On first launch the packaged app **self-migrates**: it copies `bin\`, `models\` 
 | Build dies with `os error 32` (file in use) | flowlocal.exe running, or build dir inside OneDrive | `taskkill /IM flowlocal.exe /F`; ensure `CARGO_TARGET_DIR` is outside OneDrive |
 | App shows "Hmmm… can't reach this page" | plain `cargo run` in dev mode without Vite | Use `npx tauri dev` (starts Vite) or `npm run dev` in a second terminal |
 | Transcription works but nothing pastes in one app | The app's paste chain needs larger/trying shortcuts | Read `%LOCALAPPDATA%\FlowLocal\data\paste.log` — it logs every shortcut attempt and its verdict (`landed=Yes/No/Unknown`) |
-| `engine_ready: false` / "model not found" | whisper-cli or model missing in the *install folder* | Check `bin\whisper\Release\whisper-cli.exe` and `models\ggml-*.bin` under `%LOCALAPPDATA%\FlowLocal`; rerun step 7.4 and relaunch (migration is one-time) |
+| `engine_ready: false` / "model not found" | whisper-cli or model missing in the *install folder* | Check `bin\whisper\Release\whisper-cli.exe` and `models\ggml-*.bin` under `%LOCALAPPDATA%\FlowLocal`. On a fresh install they are unpacked from the installer's own binaries on first launch — if missing there, run step 7.4 and rebuild; or launch once from a machine that has them |
 | `rustc: linker gcc not found` | w64devkit not in PATH for this session | Repeat step 7.5 |
 | Duplicated text pasted | Old build | Ensure you ran the installer built from the current source (§7.6), then re-dictate |
 
@@ -287,8 +291,9 @@ On first launch the packaged app **self-migrates**: it copies `bin\`, `models\` 
 
 - **Launch**: double-click the `FlowLocal` desktop icon or use the Start Menu entry.
 - **Auto-start**: the app registers itself in `HKCU\...\Run` (desktop icon shown, tray menu available). Toggle in settings ("Launch at login").
-- **Reinstall/update**: rebuild (§7.6) and re-run the installer with `/S`. Existing models in the install folder are reused, nothing is re-downloaded.
-- **Uninstall**: run `uninstall.exe` in `%LOCALAPPDATA%\FlowLocal`. This deletes the app together with the models and history stored inside that folder.
+- **Distribute**: to install on another machine just copy `FlowLocal_0.1.0_x64-setup.exe` and run it — it carries the app, engine and every model bundled at build time.
+- **Reinstall/update**: rebuild (§7.6) and re-run the installer with `/S`. Existing models in the install folder are reused.
+- **Note**: the NSIS uninstaller only removes what it installed; any assets the app unpacked later (`bin\`, `models\`, `data\`, settings) are left behind by design so history is safe across reinstalls. Delete the folder after uninstalling if you want those gone.
 - **Local data locations**: settings/history/dictionary: `%LOCALAPPDATA%\FlowLocal\data\*.json`; paste diagnostics: same folder, `paste.log`.
 
 ## 8. What Is Being Worked On Next
