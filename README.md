@@ -56,15 +56,16 @@ c:\Users\keith\OneDrive\Desktop\speech\
 │   ├── setup_whisper_engine.py # Automates Whisper engine & model downloads
 │   └── benchmark.py           # Benchmark script testing audio to paste
 ├── src-tauri/
-│   ├── Cargo.toml             # Rust dependencies (cpal, hound, windows-sys, tokio, etc.)
+│   ├── Cargo.toml             # Rust dependencies (cpal, hound, windows-sys/windows, tokio, etc.)
 │   └── src/
-│       ├── main.rs            # Core orchestrator pipeline
+│       ├── lib.rs             # Main orchestrator: setup, engine pipeline, Tauri commands
 │       ├── audio.rs           # CPAL capture, 300ms ring buffer pre-roll, in-memory WAV
 │       ├── vad.rs             # Energy & zero-crossing Voice Activity Detection
 │       ├── stt.rs             # Local Whisper integration (greedy decoding, prompt bias)
 │       ├── cleanup.rs         # Layer 1 deterministic cleanup (<5ms)
 │       ├── llm.rs             # Layer 2 optional AI polish (Ollama, OpenAI, Claude)
-│       ├── paste.rs           # Clipboard snapshot, Ctrl+V injection, restore & typing fallback
+│       ├── paste.rs           # Clipboard paste with verify-and-escalate chain (see §4)
+│       ├── autostart.rs       # Launch-at-login registry management (HKCU Run key)
 │       ├── hotkey.rs          # Windows low-level keyboard hook (PTT, double-tap, Esc)
 │       └── storage.rs         # Persistent JSON storage for settings, dictionary, history
 ├── powershell.cmd             # Local runner wrapper with toolchain PATH
@@ -111,9 +112,14 @@ c:\Users\keith\OneDrive\Desktop\speech\
          ▼
 [Instant Paste: paste.rs]
  • Saves current clipboard contents to memory
- • Sets clipboard to clean text
- • Synthesizes Ctrl+V into focused window via SendInput
- • Sleeps 150ms for target app consumption
+ • Sets clipboard to the clean text
+ • Injects a paste shortcut into the focused window via SendInput — trying, in
+   order, the app-specific combo (Ctrl+V, Ctrl+Shift+V or Shift+Insert for
+   terminals, chosen by window class), then Shift+Insert, then Ctrl+Shift+V
+ • After every injection, verifies with UI Automation that the focused
+   element actually changed; retries only on strong evidence of failure.
+   As a last resort it falls back to synthesized unicode typing (works in
+   every app, including terminals that ignore clipboard paste)
  • Restores original user clipboard contents
 ```
 
@@ -152,7 +158,140 @@ The app is packaged and installed, so it no longer needs Vite, cargo, or the dev
 - **Repackage after code changes**: from the repo root run `npx tauri build`, then re-run the installer at `C:\Users\keith\AppData\Local\flowlocal_target\release\bundle\nsis\FlowLocal_0.1.0_x64-setup.exe` (silent with `/S`). Reinstalled copies find existing models in the install folder and skip re-copying.
 - **Developers**: `npm run tauri dev` runs UI + backend together in dev mode (a plain `cargo run` shows an error page because Vite is not running).
 
-## 7. What Is Being Worked On Next
+## 7. Restore on a Fresh Machine (Agent / Human Runbook)
+
+This section exists so that **any AI agent or person** can clone this repository on a fresh Windows machine and end up with a working, packaged, auto-starting FlowLocal. Follow it top to bottom and verify each checkpoint before moving on. Total time budget: ~20–40 minutes (mostly downloads and one compile).
+
+### 7.0 Scope and assumptions
+
+- **Target OS**: Windows 10 or 11, x64. Admin rights are NOT required (everything installs per-user).
+- **Everything in the repo is source code only.** The Whisper engine (`bin/`), models (`models/`) and user data (`data/`) are **gitignored** and must be downloaded or generated on the new machine (steps 7.3 and 7.4 do this for you).
+- Install (non-dev) locations on the new machine:
+  - App + models + data: `C:\Users\<you>\AppData\Local\FlowLocal\`
+  - Build cache: `C:\Users\<you>\AppData\Local\flowlocal_target\`
+  - Toolchain: `C:\Users\<you>\AppData\Local\w64devkit\`
+
+### 7.1 Prerequisites
+
+1. **Python 3.x** — needed for the asset-download scripts. Check: `python --version`.
+2. **Node.js (LTS) + npm** — frontend build. Check: `node --version && npm --version`. (Built with Node v22 / npm 10.)
+3. **Rust with the GNU toolchain** — the app is built with `x86_64-pc-windows-gnu`, not MSVC:
+   ```
+   rustup default stable-x86_64-pc-windows-gnu
+   ```
+   Check: `rustup show`.
+4. **WebView2 Runtime** — preinstalled on Windows 11 and most updated Windows 10 machines.
+
+If Rust is not installed at all: download and run `rustup-init.exe` in *default mode*; then run the `rustup default` command above.
+
+### 7.2 Get the code
+
+```powershell
+git clone https://github.com/keithpatel/Flow-local.git
+cd Flow-local
+npm install
+```
+
+### 7.3 MinGW toolchain (w64devkit)
+
+The GNU Rust toolchain needs a mingw gcc. The repo ships a script that downloads w64devkit into `%LOCALAPPDATA%\w64devkit` (no admin, no system PATH changes):
+
+```powershell
+python scripts\setup_w64devkit.py
+```
+
+Verify: `%LOCALAPPDATA%\w64devkit\w64devkit\bin\gcc.exe` exists.
+
+### 7.4 Whisper engine + model (required — the repo does not ship binaries)
+
+```powershell
+python scripts\setup_whisper_engine.py
+```
+
+This downloads:
+- the official precompiled whisper.cpp binaries (AVX2, ~23 MB) into `bin\whisper\`
+- the `ggml-tiny.en.bin` model (~75 MB, the default model) into `models\`
+
+Optional (recommended for better accuracy, ~142 MB):
+```powershell
+python -c "import scripts.setup_whisper_engine as s; s.setup_model('base.en')"
+```
+Or download `ggml-base.en.bin` (or other models from the `ggml-*` list) manually into `models\`.
+
+Verify: `bin\whisper\Release\whisper-cli.exe` and `models\ggml-tiny.en.bin` exist.
+
+### 7.5 Build environment (PowerShell)
+
+Set these for **every** build session (the same values live in `run.bat` for bash/cmd):
+
+```powershell
+$W = "$env:LOCALAPPDATA\w64devkit\w64devkit"
+$env:PATH = "$W\bin;$env:USERPROFILE\.cargo\bin;$env:PATH"
+$env:LIBRARY_PATH = "$W\lib\gcc\x86_64-w64-mingw32\<GCC_VERSION>;$W\x86_64-w64-mingw32\lib"
+$env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\flowlocal_target"
+```
+
+Notes for the agent:
+- Replace `<GCC_VERSION>` with your actual gcc directory — run `gcc --version` and check `dir "$W\lib\gcc\x86_64-w64-mingw32"` (e.g. `16.2.0`).
+- `CARGO_TARGET_DIR` must stay **outside any OneDrive-synced folder**. OneDrive's file-sharing locks cause `os error 32` failures in the middle of builds.
+
+Quick sanity check (fails with `linker gcc not found` if step 7.5 was skipped):
+```powershell
+cargo check --manifest-path src-tauri\Cargo.toml
+```
+
+### 7.6 Build the installer
+
+```powershell
+npx tauri build
+```
+
+Artifacts (adjust prefix if you used a different `CARGO_TARGET_DIR`):
+- NSIS installer: `%LOCALAPPDATA%\flowlocal_target\release\bundle\nsis\FlowLocal_0.1.0_x64-setup.exe`
+- MSI installer: `%LOCALAPPDATA%\flowlocal_target\release\bundle\msi\FlowLocal_0.1.0_x64_en-US.msi`
+
+Verify: both files exist and are a few MB each.
+
+### 7.7 Install
+
+```powershell
+Start-Process -Wait "$env:LOCALAPPDATA\flowlocal_target\release\bundle\nsis\FlowLocal_0.1.0_x64-setup.exe" -ArgumentList "/S"
+```
+
+On first launch the packaged app **self-migrates**: it copies `bin\`, `models\` and `data\` from the repo folder (the path is baked in at build time and is your fresh-machine clone path) into the install folder `%LOCALAPPDATA%\FlowLocal`. Afterwards the app is fully standalone — the repo folder can be deleted.
+
+### 7.8 Verify (do not skip)
+
+1. `tasklist | findstr flowlocal` → process running after first launch.
+2. `%LOCALAPPDATA%\FlowLocal\models\ggml-tiny.en.bin` and `bin\whisper\Release\whisper-cli.exe` exist.
+3. Hold **Right Ctrl** in Notepad, speak, release → clean text appears within a second or two.
+4. Repeat inside a **terminal** (VS Code integrated terminal or Windows Terminal) → text pastes there too (it uses a different shortcut and may retry — this is the verify-and-escalate chain from §4).
+5. Dictations appear under History in the app window.
+6. Optional: enable **Launch at login** in settings, then check the registry:
+   ```
+   reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v FlowLocal
+   ```
+
+### 7.9 Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Build dies with `os error 32` (file in use) | flowlocal.exe running, or build dir inside OneDrive | `taskkill /IM flowlocal.exe /F`; ensure `CARGO_TARGET_DIR` is outside OneDrive |
+| App shows "Hmmm… can't reach this page" | plain `cargo run` in dev mode without Vite | Use `npx tauri dev` (starts Vite) or `npm run dev` in a second terminal |
+| Transcription works but nothing pastes in one app | The app's paste chain needs larger/trying shortcuts | Read `%LOCALAPPDATA%\FlowLocal\data\paste.log` — it logs every shortcut attempt and its verdict (`landed=Yes/No/Unknown`) |
+| `engine_ready: false` / "model not found" | whisper-cli or model missing in the *install folder* | Check `bin\whisper\Release\whisper-cli.exe` and `models\ggml-*.bin` under `%LOCALAPPDATA%\FlowLocal`; rerun step 7.4 and relaunch (migration is one-time) |
+| `rustc: linker gcc not found` | w64devkit not in PATH for this session | Repeat step 7.5 |
+| Duplicated text pasted | Old build | Ensure you ran the installer built from the current source (§7.6), then re-dictate |
+
+### 7.10 Everyday use after install
+
+- **Launch**: double-click the `FlowLocal` desktop icon or use the Start Menu entry.
+- **Auto-start**: the app registers itself in `HKCU\...\Run` (desktop icon shown, tray menu available). Toggle in settings ("Launch at login").
+- **Reinstall/update**: rebuild (§7.6) and re-run the installer with `/S`. Existing models in the install folder are reused, nothing is re-downloaded.
+- **Uninstall**: run `uninstall.exe` in `%LOCALAPPDATA%\FlowLocal`. This deletes the app together with the models and history stored inside that folder.
+- **Local data locations**: settings/history/dictionary: `%LOCALAPPDATA%\FlowLocal\data\*.json`; paste diagnostics: same folder, `paste.log`.
+
+## 8. What Is Being Worked On Next
 
 1. **Floating Indicator Pill Overlay & Tray**:
    * Compact always-on-top, non-activating, click-through overlay showing live audio waveform and state transitions (Idle, Listening, Processing, Done).
