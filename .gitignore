@@ -1,0 +1,17 @@
+# Build and target artifacts
+target/
+**/target/
+dist/
+node_modules/
+
+# Models and binaries
+models/*.bin
+bin/whisper/Release/*.exe
+bin/whisper/Release/*.dll
+bin/whisper/Release/*.zip
+*.wav
+
+# Temp and logs
+*.log
+*.tmp
+find_release.ps1
