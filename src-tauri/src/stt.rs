@@ -77,6 +77,13 @@ impl WhisperEngine {
         let start_time = Instant::now();
 
         let mut cmd = Command::new(&cli_path);
+        // Suppress the console window the whisper-cli would otherwise pop up
+        // in the user's face on every dictation. 0x08000000 = CREATE_NO_WINDOW.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
         cmd.arg("-m").arg(&model_path)
             .arg("-f").arg(&temp_wav_path)
             .arg("-t").arg("4")           // 4 logical cores on i5-7200U
