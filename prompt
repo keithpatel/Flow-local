@@ -1,0 +1,87 @@
+ROLE
+You are a senior desktop and systems engineer. Build a production-quality, offline-first voice dictation app that replicates the core experience of Wispr Flow: hold a hotkey, speak, release, and clean text is pasted into whatever app has focus. Work autonomously, make decisions, and implement end to end. Do not stop to ask questions unless you are truly blocked.
+
+STEP 0: USE THE REVERSE-ENGINEER-ANYTHING (REA) REPO
+Use the REA repo/skill to analyze Wispr Flow from PUBLIC sources only: its website, docs, changelog, demo videos and observable UX behavior. Produce /docs/behavior-spec.md covering:
+- the hotkey interaction model (push-to-talk, hands-free toggle, cancel)
+- the floating recording indicator and its states
+- the text cleanup behaviors (filler word removal, punctuation, self-corrections, casing, lists)
+- the personal dictionary and snippets features
+- the paste flow and the settings surface
+Clean-room rule: replicate behavior and UX only. Do not decompile, copy assets, or copy proprietary code or branding. Use an original app name and icon (working name: "FlowLocal").
+
+TARGET
+- Desktop app for my laptop. Detect my OS and build for it first (Windows or macOS), keeping the code cross-platform (Windows, macOS, Linux).
+- Stack: Tauri 2 (Rust backend) + React + TypeScript + Tailwind for the settings UI. Prefer Rust for the audio, inference and paste hot path. Justify any deviation in /docs/decisions.md.
+- 100% local by default. No account, no login, no telemetry, no network calls unless I add an API key.
+
+CORE FEATURES (MVP)
+1. Global hotkey, configurable. Default: hold Right Ctrl (Windows) or Fn/Right Option (macOS) to talk, release to transcribe and paste.
+   - Double-tap (or hotkey + Space) enables hands-free mode; press again to stop.
+   - Esc cancels the current recording.
+2. Audio capture with cpal: 16 kHz mono, low-latency ring buffer, start capturing within 50 ms of key press. Pre-roll buffer of about 300 ms so the first word is never clipped. Microphone picker in settings.
+3. Voice activity detection (Silero VAD via ONNX, or webrtc-vad) to trim silence and skip empty or noise-only recordings.
+4. Local speech-to-text:
+   - Use whisper.cpp through whisper-rs (or an equivalent faster engine such as faster-whisper/CTranslate2 or NVIDIA Parakeet if it proves faster on my hardware).
+   - Hardware acceleration auto-detected: Metal on Mac, CUDA or Vulkan on Windows/Linux, with a CPU fallback using all physical cores.
+   - Keep the model loaded in memory permanently and warm it up at launch so the first dictation is not slow.
+   - Built-in model manager: download on first run (from Hugging Face) with a progress bar and SHA verification. Offer tiny.en, base.en, small.en, distil-large-v3 and large-v3-turbo, with a recommended default chosen from my hardware benchmark at first run. Also offer a multilingual option.
+   - Use greedy decoding (beam size 1), no timestamps, and flash attention where available to maximize speed.
+5. Instant paste: copy the text to the clipboard, simulate Ctrl/Cmd+V into the focused app, then restore the previous clipboard contents after about 150 ms. Fall back to simulated typing for apps that block paste. Handle the macOS Accessibility permission flow and Windows UIPI edge cases gracefully.
+6. Floating overlay pill (small, always-on-top, click-through, bottom center): shows idle, listening (live waveform), processing and done/error states. It must never steal focus from the target app.
+7. System tray icon with menu: pause/resume dictation, open settings, switch mode, quit. Launch at login option.
+
+TEXT CLEANUP ("right and wrong" fixing)
+Layer 1, always on, offline, under 5 ms, rule-based:
+- Remove fillers (um, uh, you know, like when used as a filler), stutters and repeated words.
+- Handle self-corrections ("meet at 3, no, 4 pm" becomes "meet at 4 pm").
+- Smart punctuation, capitalization, number and date formatting, and spoken commands ("new line", "new paragraph", "period", "bullet list").
+- Personal dictionary (names, jargon, brand words), applied both as a Whisper initial_prompt bias and as post-replacement.
+- Snippets (say a trigger phrase, expand to saved text).
+
+Layer 2, optional "AI polish" with three providers, off by default:
+- Local: bundle support for a small local LLM through llama.cpp or Ollama (for example Qwen2.5-1.5B/3B-Instruct, quantized) to fix grammar and format text. It must be fully offline.
+- Cloud, only if I enter a key: a provider-agnostic OpenAI-compatible client plus native Anthropic support. Base URL, model and key are configurable. Store the key in the OS keychain (never plaintext).
+- Modes (prompt presets): Raw, Clean, Email, Message/Chat, Notes/Bullets, Code comments, and custom modes I can edit. Optionally auto-switch the mode by the active app (for example Slack to Chat, Gmail to Email).
+- Hard rule: the AI polish step must never change meaning, add content, or answer questions in the text. It only fixes and formats. Use a strict system prompt for this, and add a timeout of about 1.5 s with an automatic fallback to the Layer 1 output so pasting is never blocked.
+
+PERFORMANCE TARGETS (measure and report them)
+- Key release to text pasted: under 400 ms for an utterance of about 5 s on a base/small model with GPU, under 1 s on CPU-only.
+- Idle memory under 300 MB plus model size; idle CPU near 0%.
+- Start-of-recording latency under 50 ms; app cold start under 2 s.
+- Add a built-in benchmark command and a debug panel showing a per-stage timing breakdown (capture, VAD, STT, cleanup, paste).
+- Optimize: stream audio into the model while recording where possible, so only the tail remains to be processed on release; avoid unnecessary copies; use the async pipeline in Rust; no blocking on the UI thread.
+
+SETTINGS UI (clean, minimal, dark/light)
+- General: hotkeys, mic, launch at login, language, auto-punctuation.
+- Models: download/manage/benchmark, with GPU/CPU info.
+- Modes & AI polish: provider choice, API key field (optional), base URL, model name, test-connection button, prompt editor.
+- Dictionary & Snippets: simple editable tables with import/export.
+- History: local SQLite, searchable, with a copy/re-paste button and a retention setting (including "don't save").
+- About/Debug: logs, timing stats.
+
+PRIVACY
+- Audio is never written to disk (RAM only) unless I enable a debug option. No network except the model download and my optional API provider. Document this in the README.
+
+PROJECT STRUCTURE
+/src-tauri (Rust: audio, vad, stt, cleanup, llm, paste, hotkey, overlay, storage)
+/src (React UI)
+/docs (behavior-spec.md, decisions.md, benchmarks.md)
+/scripts (model download, benchmark)
+README.md with setup, build and troubleshooting steps for my OS.
+
+WORKFLOW
+1. Run the REA analysis and write /docs/behavior-spec.md.
+2. Scaffold the project, then build the thinnest vertical slice FIRST: hotkey, record, local whisper, paste. Verify it works with real audio before anything else.
+3. Add VAD, the overlay and the tray, then the Layer 1 cleanup.
+4. Add the model manager, settings UI, dictionary and snippets, and history.
+5. Add the Layer 2 AI polish (local LLM, then the optional API provider).
+6. Benchmark, optimize, write the tests (unit tests for cleanup rules, integration test for the audio-to-text pipeline using sample WAVs), and package an installer.
+After each phase: build, run, fix errors, and commit with a clear message. Never leave the build broken. If a library or approach fails, research alternatives and switch instead of stopping.
+
+DEFINITION OF DONE
+- I can install the app, press and hold the hotkey in any text field (browser, Word, Slack, VS Code, Notepad), speak, release, and see clean punctuated text appear almost instantly, with the internet fully disconnected.
+- Adding an API key is optional and only improves formatting. Removing the key still leaves a fully working app.
+- Benchmarks are documented, the installer is produced, and the README explains everything.
+
+Begin now with Step 0, then continue through the phases without waiting for my approval.

@@ -1,5 +1,5 @@
+use crossbeam_channel::Sender;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,6 +21,7 @@ pub enum HotkeyEvent {
     StopPushToTalk,
     ToggleHandsFree,
     Cancel,
+    ReloadSettings,
 }
 
 static mut HOOK_HANDLE: HHOOK = std::ptr::null_mut();

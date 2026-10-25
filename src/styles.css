@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+.selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1100px 600px at 12% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
+    radial-gradient(900px 500px at 110% 5%, rgba(16, 185, 129, 0.1), transparent 55%),
+    #f6f7fb;
+  color: #1e293b;
+  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+}
+
+body.overlay-body {
+  background: transparent !important;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cfd6e4;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.card {
+  @apply rounded-2xl border border-slate-200/80 bg-white shadow-sm shadow-slate-200/60;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition
+    disabled:cursor-not-allowed disabled:opacity-40;
+}
+
+.btn-primary {
+  @apply btn bg-indigo-600 text-white hover:bg-indigo-500;
+}
+
+.btn-ghost {
+  @apply btn border border-slate-200 bg-white text-slate-700 hover:bg-slate-50;
+}
+
+.field {
+  @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800
+    outline-none transition placeholder:text-slate-400 focus:border-indigo-400/70 focus:ring-2 focus:ring-indigo-500/15;
+}
+
+.label {
+  @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-500;
+}
+
+@keyframes bar {
+  0%,
+  100% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}

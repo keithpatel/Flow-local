@@ -15,3 +15,6 @@ bin/whisper/Release/*.zip
 *.log
 *.tmp
 find_release.ps1
+
+# Private local data (dictation history, settings)
+data/

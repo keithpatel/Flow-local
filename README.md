@@ -141,7 +141,18 @@ c:\Users\keith\OneDrive\Desktop\speech\
 
 ---
 
-## 6. What Is Being Worked On Next
+## 6. Daily Use: Relaunching the App
+
+The app is packaged and installed, so it no longer needs Vite, cargo, or the dev repo console.
+
+- **Launch manually**: double-click the `FlowLocal` desktop icon (also in Start Menu). Install location: `C:\Users\keith\AppData\Local\FlowLocal\flowlocal.exe`.
+- **Standalone install**: the Whisper engine, all models (`~240 MB`), and your settings/history live inside the install folder (`C:\Users\keith\AppData\Local\FlowLocal`). The app does **not** depend on the `speech` source folder anymore — it copies those assets over on first packaged launch. Keep a backup of the repo (or unpack an installer on any machine) if you plan to develop or rebuild later, because `npx tauri build` needs the sources.
+- **Launch automatically**: when Windows boots/the laptop wakes to login, FlowLocal starts by itself (it is registered in `HKCU\...\CurrentVersion\Run`). Toggle this in the app settings ("Launch at login"); the setting is stored and re-registered at every start.
+- **Uninstall**: `uninstall.exe` in the install folder removes the app along with models/settings kept there.
+- **Repackage after code changes**: from the repo root run `npx tauri build`, then re-run the installer at `C:\Users\keith\AppData\Local\flowlocal_target\release\bundle\nsis\FlowLocal_0.1.0_x64-setup.exe` (silent with `/S`). Reinstalled copies find existing models in the install folder and skip re-copying.
+- **Developers**: `npm run tauri dev` runs UI + backend together in dev mode (a plain `cargo run` shows an error page because Vite is not running).
+
+## 7. What Is Being Worked On Next
 
 1. **Floating Indicator Pill Overlay & Tray**:
    * Compact always-on-top, non-activating, click-through overlay showing live audio waveform and state transitions (Idle, Listening, Processing, Done).

@@ -3,7 +3,6 @@ use std::collections::HashMap;
 
 pub struct CleanupEngine {
     fillers_regex: Regex,
-    stutters_regex: Regex,
     self_corrections: Vec<(Regex, &'static str)>,
     spoken_punct: Vec<(Regex, &'static str)>,
     dictionary: HashMap<String, String>,
@@ -12,20 +11,12 @@ pub struct CleanupEngine {
 
 impl CleanupEngine {
     pub fn new() -> Self {
-        // 1. Fillers: 'um', 'uh', 'er', 'ah', 'hmm', 'you know', 'i mean', 'sort of', 'kind of'
-        // 'like' as filler: e.g. ", like," or "like, "
-        let fillers_regex = RegexBuilder::new(r"\b(um|uh|er|ah|hmm|you know|i mean|sort of|kind of)\b,?\s*")
-            .case_insensitive(true)
+        // 1. Fillers with surrounding commas: 'um', 'uh', 'er', 'ah', 'hmm', 'you know', 'i mean', 'sort of', 'kind of'
+        let fillers_regex = RegexBuilder::new(r"(?i),?\s*\b(um|uh|er|ah|hmm|you know|i mean|sort of|kind of)\b,?\s*")
             .build()
             .unwrap();
 
-        // 2. Stutters / repeated adjacent words: "the the" -> "the", "I I" -> "I"
-        let stutters_regex = RegexBuilder::new(r"\b([a-zA-Z]+)\s+\1\b")
-            .case_insensitive(true)
-            .build()
-            .unwrap();
-
-        // 3. Spoken Self-corrections:
+        // 2. Spoken Self-corrections:
         // "meet at 3, no, 4 pm" -> "meet at 4 pm"
         // "invoice to Sarah, actually send it to John" -> "invoice to John"
         // "budget is 10k, wait, 12k" -> "budget is 12k"
@@ -34,7 +25,7 @@ impl CleanupEngine {
             (Regex::new(r"(?i)\b.+?,\s*actually,?\s*(.+)").unwrap(), "$1"),
         ];
 
-        // 4. Spoken punctuation commands:
+        // 3. Spoken punctuation commands:
         let spoken_punct = vec![
             (Regex::new(r"(?i)\s*\b(new paragraph)\b\s*").unwrap(), "\n\n"),
             (Regex::new(r"(?i)\s*\b(new line)\b\s*").unwrap(), "\n"),
@@ -49,7 +40,6 @@ impl CleanupEngine {
 
         Self {
             fillers_regex,
-            stutters_regex,
             self_corrections,
             spoken_punct,
             dictionary: HashMap::new(),
@@ -93,11 +83,10 @@ impl CleanupEngine {
         }
 
         // Remove Fillers
-        text = self.fillers_regex.replace_all(&text, "").to_string();
+        text = self.fillers_regex.replace_all(&text, " ").to_string();
 
-        // Collapse Stutters (loop twice to catch triplicates e.g. "the the the")
-        text = self.stutters_regex.replace_all(&text, "$1").to_string();
-        text = self.stutters_regex.replace_all(&text, "$1").to_string();
+        // Collapse Stutters / repeated adjacent words ("the the" -> "the", "I I" -> "I")
+        text = Self::collapse_stutters(&text);
 
         // Clean up punctuation spacing: e.g. " ," -> "," or " ." -> "."
         let fix_space_punct = Regex::new(r"\s+([,\.!\?:;])").unwrap();
@@ -121,6 +110,26 @@ impl CleanupEngine {
         text.trim().to_string()
     }
 
+    fn collapse_stutters(input: &str) -> String {
+        let words: Vec<&str> = input.split_whitespace().collect();
+        if words.is_empty() {
+            return String::new();
+        }
+
+        let mut deduped: Vec<&str> = Vec::with_capacity(words.len());
+        for word in words {
+            let clean_w = word.trim_matches(|c: char| c.is_ascii_punctuation()).to_lowercase();
+            let prev_w = deduped.last().map(|w| w.trim_matches(|c: char| c.is_ascii_punctuation()).to_lowercase());
+
+            if Some(clean_w) == prev_w && !word.contains(|c: char| c == '.' || c == '!' || c == '?') {
+                continue;
+            }
+            deduped.push(word);
+        }
+
+        deduped.join(" ")
+    }
+
     fn capitalize_sentences(input: &str) -> String {
         let mut chars: Vec<char> = input.chars().collect();
         let mut capitalize_next = true;
@@ -128,7 +137,11 @@ impl CleanupEngine {
         for i in 0..chars.len() {
             let c = chars[i];
             if capitalize_next && c.is_alphabetic() {
-                chars[i] = c.to_uppercase().next().unwrap_or(c);
+                // If preceded by a digit (e.g. "4 pm"), do not force capitalize
+                let preceded_by_digit = i > 0 && chars[..i].iter().rev().any(|&prev| prev.is_digit(10) && chars[..i].iter().rev().take(3).all(|&mid| mid.is_whitespace() || mid.is_digit(10)));
+                if !preceded_by_digit {
+                    chars[i] = c.to_uppercase().next().unwrap_or(c);
+                }
                 capitalize_next = false;
             } else if c == '.' || c == '!' || c == '?' || c == '\n' {
                 capitalize_next = true;

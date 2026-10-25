@@ -11,6 +11,7 @@ pub struct AudioRecorder {
     pre_roll_buffer: Arc<Mutex<VecDeque<f32>>>,
     active_buffer: Arc<Mutex<Vec<f32>>>,
     current_rms: Arc<Mutex<f32>>,
+    waveform: Arc<Mutex<VecDeque<f32>>>,
     stream: Option<Stream>,
 }
 
@@ -18,6 +19,7 @@ impl AudioRecorder {
     pub const TARGET_SAMPLE_RATE: u32 = 16000;
     // 300 ms pre-roll at 16,000 Hz = 4,800 samples
     pub const PRE_ROLL_SAMPLES: usize = 4800;
+    pub const WAVEFORM_BARS: usize = 56;
 
     pub fn new() -> Self {
         Self {
@@ -26,6 +28,7 @@ impl AudioRecorder {
             pre_roll_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(Self::PRE_ROLL_SAMPLES))),
             active_buffer: Arc::new(Mutex::new(Vec::new())),
             current_rms: Arc::new(Mutex::new(0.0)),
+            waveform: Arc::new(Mutex::new(VecDeque::with_capacity(Self::WAVEFORM_BARS))),
             stream: None,
         }
     }
@@ -65,6 +68,7 @@ impl AudioRecorder {
         let pre_roll_clone = Arc::clone(&self.pre_roll_buffer);
         let active_buf_clone = Arc::clone(&self.active_buffer);
         let current_rms_clone = Arc::clone(&self.current_rms);
+        let waveform_clone = Arc::clone(&self.waveform);
 
         let err_fn = |err| eprintln!("Audio stream error: {}", err);
 
@@ -80,6 +84,7 @@ impl AudioRecorder {
                         &pre_roll_clone,
                         &active_buf_clone,
                         &current_rms_clone,
+                        &waveform_clone,
                     );
                 },
                 err_fn,
@@ -98,6 +103,7 @@ impl AudioRecorder {
                         &pre_roll_clone,
                         &active_buf_clone,
                         &current_rms_clone,
+                        &waveform_clone,
                     );
                 },
                 err_fn,
@@ -123,6 +129,7 @@ impl AudioRecorder {
         pre_roll: &Arc<Mutex<VecDeque<f32>>>,
         active_buf: &Arc<Mutex<Vec<f32>>>,
         current_rms: &Arc<Mutex<f32>>,
+        waveform: &Arc<Mutex<VecDeque<f32>>>,
     ) {
         if data.is_empty() {
             return;
@@ -150,6 +157,14 @@ impl AudioRecorder {
         let rms = crate::vad::VadGate::calculate_rms(&resampled);
         if let Ok(mut r) = current_rms.try_lock() {
             *r = rms;
+        }
+
+        let peak = resampled.iter().fold(0.0f32, |acc, s| acc.max(s.abs()));
+        if let Ok(mut bars) = waveform.try_lock() {
+            if bars.len() >= Self::WAVEFORM_BARS {
+                bars.pop_front();
+            }
+            bars.push_back(peak);
         }
 
         let recording = *is_recording.lock().unwrap();
@@ -198,6 +213,9 @@ impl AudioRecorder {
             *rec = true;
             let mut active = self.active_buffer.lock().unwrap();
             active.clear();
+            if let Ok(mut bars) = self.waveform.lock() {
+                bars.clear();
+            }
 
             // Pre-seed active buffer with pre-roll contents so initial phoneme is never clipped
             let ring = self.pre_roll_buffer.lock().unwrap();
@@ -226,6 +244,24 @@ impl AudioRecorder {
         *self.current_rms.lock().unwrap()
     }
 
+    pub fn handle(&self) -> AudioHandle {
+        AudioHandle {
+            is_recording: Arc::clone(&self.is_recording),
+            pre_roll_buffer: Arc::clone(&self.pre_roll_buffer),
+            active_buffer: Arc::clone(&self.active_buffer),
+            current_rms: Arc::clone(&self.current_rms),
+            waveform: Arc::clone(&self.waveform),
+        }
+    }
+
+    pub fn level_handle(&self) -> Arc<Mutex<f32>> {
+        Arc::clone(&self.current_rms)
+    }
+
+    pub fn waveform_handle(&self) -> Arc<Mutex<VecDeque<f32>>> {
+        Arc::clone(&self.waveform)
+    }
+
     /// Converts raw 16kHz f32 samples to 16-bit PCM WAV bytes in memory
     pub fn samples_to_wav(samples: &[f32]) -> Result<Vec<u8>, String> {
         let spec = WavSpec {
@@ -248,5 +284,57 @@ impl AudioRecorder {
         }
 
         Ok(cursor.into_inner())
+    }
+}
+
+/// A thread-safe control handle for an already-running capture stream.
+/// The underlying cpal `Stream` stays on the thread that created it; this
+/// handle only shares the lock-free buffers with the processing thread.
+#[derive(Clone)]
+pub struct AudioHandle {
+    is_recording: Arc<Mutex<bool>>,
+    pre_roll_buffer: Arc<Mutex<VecDeque<f32>>>,
+    active_buffer: Arc<Mutex<Vec<f32>>>,
+    current_rms: Arc<Mutex<f32>>,
+    waveform: Arc<Mutex<VecDeque<f32>>>,
+}
+
+impl AudioHandle {
+    pub fn start_recording(&self) {
+        let mut rec = self.is_recording.lock().unwrap();
+        if !*rec {
+            *rec = true;
+            let mut active = self.active_buffer.lock().unwrap();
+            active.clear();
+            if let Ok(mut bars) = self.waveform.lock() {
+                bars.clear();
+            }
+            let ring = self.pre_roll_buffer.lock().unwrap();
+            active.extend(ring.iter());
+        }
+    }
+
+    pub fn stop_recording(&self) -> Vec<f32> {
+        let mut rec = self.is_recording.lock().unwrap();
+        *rec = false;
+        let mut active = self.active_buffer.lock().unwrap();
+        let samples = active.clone();
+        active.clear();
+        samples
+    }
+
+    pub fn cancel_recording(&self) {
+        let mut rec = self.is_recording.lock().unwrap();
+        *rec = false;
+        let mut active = self.active_buffer.lock().unwrap();
+        active.clear();
+    }
+
+    pub fn get_current_rms(&self) -> f32 {
+        *self.current_rms.lock().unwrap()
+    }
+
+    pub fn samples_to_wav(samples: &[f32]) -> Result<Vec<u8>, String> {
+        AudioRecorder::samples_to_wav(samples)
     }
 }
