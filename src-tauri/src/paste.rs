@@ -81,10 +81,10 @@ impl PasteEngine {
     /// Copies text to clipboard, pastes into the focused app, then restores the
     /// original clipboard contents.
     ///
-    /// Each attempt is verified with UI Automation: if the focused element did
-    /// not change, the next shortcut in the chain is tried, and as a last resort
-    /// the text is typed via synthesized unicode keystrokes, which works in
-    /// every app including terminals that ignore clipboard paste.
+    /// Exactly one shortcut is ever injected. Verification with UI Automation is
+    /// logged but never acted upon: Chromium and terminal readouts either update
+    /// late or not at all, so a retry of an attempt that actually landed would
+    /// paste the same text several times.
     pub fn paste(text: &str) -> Result<(), String> {
         if text.trim().is_empty() {
             return Ok(());
@@ -102,21 +102,24 @@ impl PasteEngine {
         sleep(Duration::from_millis(80));
 
         let class = Self::foreground_class();
-        let chain = Self::attempt_chain(&class);
+        let mode = Self::primary_mode(&class);
 
-        let mut verified = false;
-        let mut assumed = false;
-        for mode in &chain {
-            let pre = Self::focus_text_snapshot();
-            let sent = Self::send_paste(*mode);
+        let pre = Self::focus_text_snapshot();
+        let sent = Self::send_paste(mode);
+        if sent == 0 {
+            Self::log(&format!(
+                "class='{}' mode={:?} SendInput failed, typing instead",
+                class, mode
+            ));
+            Self::type_text_fallback(text);
+        } else {
             sleep(Duration::from_millis(300));
             let post = Self::focus_text_snapshot();
             let mut verdict = Self::verdict(pre.as_deref(), post.as_deref(), text);
             if verdict == Landed::No {
                 // Chromium-based targets update their accessibility text
-                // asynchronously; give it one more beat before concluding the
-                // paste failed, otherwise a first attempt that actually worked
-                // would be retried and pasted twice.
+                // asynchronously; give it one more beat so the log reflects
+                // what really happened.
                 sleep(Duration::from_millis(280));
                 let post2 = Self::focus_text_snapshot();
                 verdict = Self::verdict(pre.as_deref(), post2.as_deref(), text);
@@ -125,24 +128,6 @@ impl PasteEngine {
                 "class='{}' mode={:?} sent={} landed={:?}",
                 class, mode, sent, verdict
             ));
-            match verdict {
-                Landed::Yes => {
-                    verified = true;
-                    break;
-                }
-                Landed::Unknown => {
-                    // Verification is unavailable (app not exposing UIA):
-                    // stop injecting to avoid double pastes.
-                    assumed = true;
-                    break;
-                }
-                Landed::No => continue,
-            }
-        }
-
-        if !verified && !assumed {
-            Self::log("all shortcuts failed, falling back to typing");
-            Self::type_text_fallback(text);
         }
 
         // Allow heavier targets (VSCode, terminals, Slack) time to read the clipboard
@@ -157,22 +142,14 @@ impl PasteEngine {
         Ok(())
     }
 
-    /// Shortcut chain for the given window class: class-specific combo first,
-    /// then the universally supported Shift+Insert and Ctrl+Shift+V.
-    fn attempt_chain(class: &str) -> Vec<PasteMode> {        let mut chain = Vec::new();
-        let first = TERMINAL_CLASSES
+    /// Shortcut for the given window class: the class-specific combo when known,
+    /// otherwise the Ctrl+V default.
+    fn primary_mode(class: &str) -> PasteMode {
+        TERMINAL_CLASSES
             .iter()
             .find(|(c, _)| *c == class)
             .map(|(_, m)| *m)
-            .unwrap_or(PasteMode::CtrlV);
-        chain.push(first);
-        if first != PasteMode::ShiftInsert {
-            chain.push(PasteMode::ShiftInsert);
-        }
-        if first != PasteMode::CtrlShiftV {
-            chain.push(PasteMode::CtrlShiftV);
-        }
-        chain
+            .unwrap_or(PasteMode::CtrlV)
     }
 
     /// Decides whether a paste attempt succeeded, based on UIA readouts taken
