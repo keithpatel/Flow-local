@@ -751,6 +751,12 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 
 pub fn run() {
     tauri::Builder::default()
+        // Must be the first plugin: a second launch should hand control to the
+        // already-running instance instead of installing a second keyboard
+        // hook (which would paste every dictation twice).
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main(app);
+        }))
         .setup(|app| {
             eprintln!("[FlowLocal] setup: begin");
         let app_root = resolve_app_root();

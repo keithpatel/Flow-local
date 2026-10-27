@@ -12,6 +12,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
 cpal = "0.15"
 crossbeam-channel = "0.5"
 hound = "3.5"
